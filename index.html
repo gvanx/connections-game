@@ -1,55 +1,14 @@
 <!--
   ============================================================
-  SUPABASE SETUP — Run this SQL in your Supabase SQL Editor:
+  SUPABASE SETUP — see supabase-queries.md for full SQL
   https://supabase.com/dashboard/project/ngzxrygvotftmpgmzmcy/sql
-  ============================================================
 
-  -- 1. Create the spin_codes table
-  CREATE TABLE spin_codes (
-    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    code text UNIQUE NOT NULL,
-    created_at timestamptz DEFAULT now(),
-    used boolean DEFAULT false,
-    used_at timestamptz
-  );
+  Architecture: All prize logic runs server-side via the
+  spin_the_wheel(p_code) RPC function. The client only
+  sends the code and animates to the server-decided prize.
 
-  -- 2. Create the spin_results table
-  CREATE TABLE spin_results (
-    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    code_id uuid REFERENCES spin_codes(id),
-    prize text NOT NULL,
-    spun_at timestamptz DEFAULT now()
-  );
-
-  -- 3. Enable Row Level Security
-  ALTER TABLE spin_codes ENABLE ROW LEVEL SECURITY;
-  ALTER TABLE spin_results ENABLE ROW LEVEL SECURITY;
-
-  -- 4. Allow anonymous SELECT on spin_codes (validate codes)
-  CREATE POLICY "anon_select_codes" ON spin_codes
-    FOR SELECT TO anon USING (true);
-
-  -- 5. Allow anonymous UPDATE on spin_codes (mark as used)
-  CREATE POLICY "anon_update_codes" ON spin_codes
-    FOR UPDATE TO anon
-    USING (used = false)
-    WITH CHECK (used = true);
-
-  -- 6. Allow anonymous INSERT on spin_results (log prizes)
-  CREATE POLICY "anon_insert_results" ON spin_results
-    FOR INSERT TO anon WITH CHECK (true);
-
-  -- 7. Insert some test codes
-  INSERT INTO spin_codes (code) VALUES
-    ('SPIN-TEST'),
-    ('SPIN-DEMO'),
-    ('SPIN-WIN1');
-
-  -- 8. Generate batch codes (run when you need more)
-  -- INSERT INTO spin_codes (code)
-  -- SELECT 'SPIN-' || upper(substr(md5(random()::text), 1, 4))
-  -- FROM generate_series(1, 50);
-
+  Tables: spin_codes, spin_results, prizes
+  Function: spin_the_wheel(text) — SECURITY DEFINER
   ============================================================
 -->
 <!DOCTYPE html>
@@ -567,24 +526,25 @@ const SUPABASE_URL  = 'https://ngzxrygvotftmpgmzmcy.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5nenhyeWd2b3RmdG1wZ216bWN5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA2NTg1NDksImV4cCI6MjA4NjIzNDU0OX0.pFCPycFB0mBdnMQovwNPDIFc2PEbusuRCD0WJU9WP9s';
 
 /* ═══════════════════════════════════════════
-   PRIZES — edit labels, colors, weights anytime
+   PRIZES — labels & colors for drawing only
+   (weights live server-side in prizes table)
    ═══════════════════════════════════════════ */
 const PRIZES = [
-  { label: '5% off next purchase',    color: '#00b4d8', weight: 30 },
-  { label: 'Free screen protector',   color: '#ef476f', weight: 25 },
-  { label: '10% off next purchase',   color: '#06d6a0', weight: 25 },
-  { label: 'NAf 10 store credit',     color: '#7209b7', weight: 20 },
-  { label: '15% off next purchase',   color: '#ff6b35', weight: 20 },
-  { label: 'Free phone case',         color: '#118ab2', weight: 15 },
-  { label: 'NAf 25 store credit',     color: '#f72585', weight: 10 },
-  { label: 'Free earbuds',            color: '#4361ee', weight: 8  },
-  { label: 'Samsung Galaxy A07',      color: '#ffd60a', weight: 2, textColor: '#1a1a2e', jackpot: true },
+  { label: '5% off next purchase',    color: '#00b4d8' },
+  { label: 'Free screen protector',   color: '#ef476f' },
+  { label: '10% off next purchase',   color: '#06d6a0' },
+  { label: 'NAf 10 store credit',     color: '#7209b7' },
+  { label: '15% off next purchase',   color: '#ff6b35' },
+  { label: 'Free phone case',         color: '#118ab2' },
+  { label: 'NAf 25 store credit',     color: '#f72585' },
+  { label: 'Free earbuds',            color: '#4361ee' },
+  { label: 'Samsung Galaxy A07',      color: '#ffd60a', textColor: '#1a1a2e', jackpot: true },
 ];
 
 /* ═══════════════════════════════════════════
    STATE
    ═══════════════════════════════════════════ */
-let codeRecord = null;   // { id, code } from Supabase
+let pendingResult = null;   // { prize_index, prize_label, jackpot, code } from RPC
 let isSpinning = false;
 
 /* ═══════════════════════════════════════════
@@ -618,38 +578,18 @@ const sbHeaders = {
   'Authorization': 'Bearer ' + SUPABASE_ANON,
 };
 
-async function verifyCode(code) {
+async function callSpinRPC(code) {
   try {
-    const res = await fetch(
-      SUPABASE_URL + '/rest/v1/spin_codes?code=eq.' + encodeURIComponent(code) + '&used=eq.false&select=id,code',
-      { headers: sbHeaders }
-    );
+    const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/spin_the_wheel', {
+      method: 'POST',
+      headers: { ...sbHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_code: code }),
+    });
     if (!res.ok) return null;
-    const rows = await res.json();
-    return rows.length ? rows[0] : null;
+    return await res.json();
   } catch {
     return null;
   }
-}
-
-async function markUsed(id) {
-  try {
-    await fetch(SUPABASE_URL + '/rest/v1/spin_codes?id=eq.' + id, {
-      method: 'PATCH',
-      headers: { ...sbHeaders, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-      body: JSON.stringify({ used: true, used_at: new Date().toISOString() }),
-    });
-  } catch { /* best effort */ }
-}
-
-async function logResult(codeId, prizeLabel) {
-  try {
-    await fetch(SUPABASE_URL + '/rest/v1/spin_results', {
-      method: 'POST',
-      headers: { ...sbHeaders, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-      body: JSON.stringify({ code_id: codeId, prize: prizeLabel }),
-    });
-  } catch { /* best effort */ }
 }
 
 /* ═══════════════════════════════════════════
@@ -754,34 +694,20 @@ function drawWheel(rotation) {
 }
 
 /* ═══════════════════════════════════════════
-   PRIZE SELECTION (weighted random)
-   ═══════════════════════════════════════════ */
-function pickPrize() {
-  const total = PRIZES.reduce((s, p) => s + p.weight, 0);
-  let rng = Math.random() * total;
-  for (const p of PRIZES) {
-    rng -= p.weight;
-    if (rng <= 0) return p;
-  }
-  return PRIZES[0];
-}
-
-/* ═══════════════════════════════════════════
    SPIN ANIMATION
    ═══════════════════════════════════════════ */
 function spinWheel() {
-  if (isSpinning) return;
+  if (isSpinning || !pendingResult) return;
   isSpinning = true;
   btnSpin.disabled = true;
   pointer.classList.add('spinning');
 
-  const prize = pickPrize();
-  const idx = PRIZES.indexOf(prize);
+  const idx = pendingResult.prize_index;
   const sliceDeg = 360 / PRIZES.length;
 
   /* Target: pointer at top (270°) lands on center of segment idx */
   const targetBase = 270 - (idx * sliceDeg + sliceDeg / 2);
-  const jitter = (Math.random() - 0.5) * (sliceDeg * 0.6); /* random offset within segment */
+  const jitter = (Math.random() - 0.5) * (sliceDeg * 0.6);
   const normalised = ((targetBase + jitter) % 360 + 360) % 360;
   const fullSpins = (5 + Math.floor(Math.random() * 3)) * 360;
   const totalDeg = fullSpins + normalised;
@@ -791,7 +717,6 @@ function spinWheel() {
 
   function frame(now) {
     const t = Math.min((now - start) / duration, 1);
-    /* Ease-out quart for a satisfying slowdown */
     const eased = 1 - Math.pow(1 - t, 4);
     const deg = eased * totalDeg;
     drawWheel((deg * Math.PI) / 180);
@@ -800,7 +725,7 @@ function spinWheel() {
       requestAnimationFrame(frame);
     } else {
       pointer.classList.remove('spinning');
-      setTimeout(() => onSpinComplete(prize), 500);
+      setTimeout(() => onSpinComplete(), 500);
     }
   }
 
@@ -810,17 +735,12 @@ function spinWheel() {
 /* ═══════════════════════════════════════════
    ON SPIN COMPLETE
    ═══════════════════════════════════════════ */
-async function onSpinComplete(prize) {
-  /* Log to Supabase (fire-and-forget) */
-  markUsed(codeRecord.id);
-  logResult(codeRecord.id, prize.label);
-
-  /* Populate result screen */
-  const isJackpot = !!prize.jackpot;
+function onSpinComplete() {
+  const isJackpot = !!pendingResult.jackpot;
   $('#resultCard').classList.toggle('jackpot', isJackpot);
   $('#resultHeader').textContent = isJackpot ? 'JACKPOT!' : 'You won!';
-  $('#prizeName').textContent = prize.label;
-  $('#prizeCode').textContent = codeRecord.code;
+  $('#prizeName').textContent = pendingResult.prize_label;
+  $('#prizeCode').textContent = pendingResult.code;
 
   showScreen(screenResult);
   launchConfetti(isJackpot);
@@ -902,22 +822,22 @@ btnVerify.addEventListener('click', async () => {
   loader.className = 'btn-loader';
   btnVerify.appendChild(loader);
 
-  const record = await verifyCode(code);
+  const result = await callSpinRPC(code);
 
   /* Reset button */
   btnVerify.disabled = false;
   btnVerify.querySelector('.btn-text').textContent = 'Unlock Your Spin';
   if (loader.parentNode) loader.remove();
 
-  if (!record) {
+  if (!result) {
     codeError.textContent = 'Invalid or already used code. Check and try again.';
     codeInput.classList.add('shake');
     setTimeout(() => codeInput.classList.remove('shake'), 500);
     return;
   }
 
-  /* Valid code — transition to wheel */
-  codeRecord = record;
+  /* Valid code — prize already decided server-side */
+  pendingResult = result;
   showScreen(screenWheel);
   setupCanvas();
   drawWheel(0);
