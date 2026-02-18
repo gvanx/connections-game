@@ -1,0 +1,939 @@
+<!--
+  ============================================================
+  SUPABASE SETUP — Run this SQL in your Supabase SQL Editor:
+  https://supabase.com/dashboard/project/ngzxrygvotftmpgmzmcy/sql
+  ============================================================
+
+  -- 1. Create the spin_codes table
+  CREATE TABLE spin_codes (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    code text UNIQUE NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    used boolean DEFAULT false,
+    used_at timestamptz
+  );
+
+  -- 2. Create the spin_results table
+  CREATE TABLE spin_results (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    code_id uuid REFERENCES spin_codes(id),
+    prize text NOT NULL,
+    spun_at timestamptz DEFAULT now()
+  );
+
+  -- 3. Enable Row Level Security
+  ALTER TABLE spin_codes ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE spin_results ENABLE ROW LEVEL SECURITY;
+
+  -- 4. Allow anonymous SELECT on spin_codes (validate codes)
+  CREATE POLICY "anon_select_codes" ON spin_codes
+    FOR SELECT TO anon USING (true);
+
+  -- 5. Allow anonymous UPDATE on spin_codes (mark as used)
+  CREATE POLICY "anon_update_codes" ON spin_codes
+    FOR UPDATE TO anon
+    USING (used = false)
+    WITH CHECK (used = true);
+
+  -- 6. Allow anonymous INSERT on spin_results (log prizes)
+  CREATE POLICY "anon_insert_results" ON spin_results
+    FOR INSERT TO anon WITH CHECK (true);
+
+  -- 7. Insert some test codes
+  INSERT INTO spin_codes (code) VALUES
+    ('SPIN-TEST'),
+    ('SPIN-DEMO'),
+    ('SPIN-WIN1');
+
+  -- 8. Generate batch codes (run when you need more)
+  -- INSERT INTO spin_codes (code)
+  -- SELECT 'SPIN-' || upper(substr(md5(random()::text), 1, 4))
+  -- FROM generate_series(1, 50);
+
+  ============================================================
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Spin & Win | Connections Curacao</title>
+  <meta name="description" content="Spin the wheel and win prizes! A reward from Connections Curacao." />
+  <link rel="canonical" href="https://game.connectionscuracao.net/" />
+  <meta property="og:title" content="Spin & Win | Connections Curacao" />
+  <meta property="og:description" content="You've earned a spin! Enter your code and win prizes." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://game.connectionscuracao.net/" />
+  <meta name="theme-color" content="#070b14" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ─── Reset ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ─── Variables ─── */
+    :root {
+      --bg: #070b14;
+      --surface: rgba(255,255,255,0.04);
+      --surface-border: rgba(255,255,255,0.08);
+      --neon: #00d4ff;
+      --neon-dim: rgba(0,212,255,0.15);
+      --neon-glow: rgba(0,212,255,0.35);
+      --teal: #2d7a9f;
+      --gold: #ffd60a;
+      --text: #f0f0f0;
+      --text-dim: rgba(255,255,255,0.5);
+      --radius: 24px;
+      --font-display: 'Bricolage Grotesque', system-ui, sans-serif;
+      --font-body: 'DM Sans', system-ui, sans-serif;
+    }
+
+    /* ─── Body + Background ─── */
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font-body);
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    .orb {
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(100px);
+      opacity: 0.4;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .orb-1 {
+      width: 500px; height: 500px;
+      background: radial-gradient(circle, rgba(0,212,255,0.3), transparent 70%);
+      top: -10%; left: -10%;
+      animation: drift1 22s ease-in-out infinite alternate;
+    }
+    .orb-2 {
+      width: 400px; height: 400px;
+      background: radial-gradient(circle, rgba(114,9,183,0.25), transparent 70%);
+      bottom: -8%; right: -8%;
+      animation: drift2 26s ease-in-out infinite alternate;
+    }
+    .orb-3 {
+      width: 350px; height: 350px;
+      background: radial-gradient(circle, rgba(255,107,53,0.15), transparent 70%);
+      top: 40%; left: 50%;
+      animation: drift3 30s ease-in-out infinite alternate;
+    }
+    @keyframes drift1 { to { transform: translate(80px, 60px); } }
+    @keyframes drift2 { to { transform: translate(-60px, -50px); } }
+    @keyframes drift3 { to { transform: translate(-90px, 40px); } }
+
+    /* ─── Screens ─── */
+    .screen {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s ease, transform 0.5s ease;
+      transform: translateY(16px);
+      padding: 24px;
+    }
+    .screen.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    /* ─── Code Entry Screen ─── */
+    .entry-card {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: var(--radius);
+      padding: 48px 36px 40px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow:
+        0 0 60px rgba(0,212,255,0.06),
+        0 24px 80px rgba(0,0,0,0.4),
+        inset 0 1px 0 rgba(255,255,255,0.06);
+      animation: cardIn 0.7s ease-out both;
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(30px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .logo-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px; height: 56px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, var(--neon), var(--teal));
+      color: #fff;
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 20px;
+      letter-spacing: -0.5px;
+      margin-bottom: 24px;
+      box-shadow: 0 0 30px var(--neon-dim);
+    }
+
+    .entry-card h1 {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: clamp(2rem, 6vw, 2.8rem);
+      letter-spacing: -1px;
+      background: linear-gradient(135deg, var(--neon) 0%, #06d6a0 50%, var(--neon) 100%);
+      background-size: 200% auto;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: shimmer 4s linear infinite;
+      margin-bottom: 8px;
+      line-height: 1.1;
+    }
+    @keyframes shimmer {
+      to { background-position: 200% center; }
+    }
+
+    .subtitle {
+      color: var(--text-dim);
+      font-size: 0.95rem;
+      margin-bottom: 32px;
+      line-height: 1.5;
+    }
+
+    .input-group { margin-bottom: 20px; }
+
+    .input-group input {
+      width: 100%;
+      padding: 16px 20px;
+      border: 1px solid var(--surface-border);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.03);
+      color: #fff;
+      font-family: var(--font-body);
+      font-size: 1rem;
+      font-weight: 500;
+      letter-spacing: 1.5px;
+      text-align: center;
+      text-transform: uppercase;
+      transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+      outline: none;
+    }
+    .input-group input::placeholder {
+      color: rgba(255,255,255,0.2);
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 400;
+    }
+    .input-group input:focus {
+      border-color: var(--neon);
+      background: rgba(0,212,255,0.04);
+      box-shadow: 0 0 0 4px var(--neon-dim), 0 0 30px rgba(0,212,255,0.08);
+    }
+    .input-group input.shake {
+      animation: shake 0.5s ease;
+    }
+    @keyframes shake {
+      10%, 90% { transform: translateX(-2px); }
+      20%, 80% { transform: translateX(4px); }
+      30%, 50%, 70% { transform: translateX(-6px); }
+      40%, 60% { transform: translateX(6px); }
+    }
+
+    .error-msg {
+      color: #ef476f;
+      font-size: 0.85rem;
+      font-weight: 500;
+      margin-top: 10px;
+      min-height: 20px;
+      transition: opacity 0.25s;
+    }
+
+    /* ─── Buttons ─── */
+    .btn {
+      font-family: var(--font-body);
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .btn-primary {
+      width: 100%;
+      padding: 16px 32px;
+      border-radius: 16px;
+      font-size: 1rem;
+      color: #fff;
+      background: linear-gradient(135deg, var(--teal), #1e5f7a);
+      box-shadow: 0 4px 24px rgba(45,122,159,0.3);
+      position: relative;
+      overflow: hidden;
+    }
+    .btn-primary::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, transparent, rgba(255,255,255,0.1), transparent);
+      transform: translateX(-100%);
+      transition: transform 0.5s;
+    }
+    .btn-primary:hover::before { transform: translateX(100%); }
+    .btn-primary:hover {
+      box-shadow: 0 6px 32px rgba(45,122,159,0.45);
+      transform: translateY(-1px);
+    }
+    .btn-primary:active { transform: translateY(1px) scale(0.98); }
+    .btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .btn-primary:disabled::before { display: none; }
+
+    .btn-loader {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ─── Wheel Screen ─── */
+    .wheel-stage {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 32px;
+    }
+    .wheel-glow {
+      position: absolute;
+      width: 110%;
+      height: 110%;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--neon-dim) 0%, transparent 70%);
+      animation: pulseGlow 3s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 0.5; transform: scale(1); }
+      50% { opacity: 0.8; transform: scale(1.05); }
+    }
+
+    .wheel-wrap {
+      position: relative;
+      display: inline-block;
+    }
+    .wheel-wrap canvas {
+      display: block;
+      max-width: 85vw;
+      max-height: 85vw;
+      height: auto;
+    }
+
+    .pointer {
+      position: absolute;
+      top: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      width: 0; height: 0;
+      border-left: 16px solid transparent;
+      border-right: 16px solid transparent;
+      border-top: 32px solid #fff;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6)) drop-shadow(0 0 10px var(--neon-glow));
+      transition: filter 0.3s;
+    }
+    .pointer.spinning {
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6)) drop-shadow(0 0 20px var(--neon));
+    }
+
+    .btn-spin {
+      padding: 18px 56px;
+      border-radius: 50px;
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.15rem;
+      letter-spacing: 2px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--neon), var(--teal));
+      box-shadow: 0 0 30px var(--neon-dim), 0 4px 20px rgba(0,0,0,0.3);
+      animation: pulseSpin 2s ease-in-out infinite;
+    }
+    @keyframes pulseSpin {
+      0%, 100% { box-shadow: 0 0 30px var(--neon-dim), 0 4px 20px rgba(0,0,0,0.3); }
+      50% { box-shadow: 0 0 50px var(--neon-glow), 0 4px 20px rgba(0,0,0,0.3); }
+    }
+    .btn-spin:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 0 50px var(--neon-glow), 0 8px 30px rgba(0,0,0,0.3);
+    }
+    .btn-spin:active { transform: scale(0.97); }
+    .btn-spin:disabled {
+      animation: none;
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ─── Result Screen ─── */
+    .result-card {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: var(--radius);
+      padding: 48px 36px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow:
+        0 0 60px rgba(0,212,255,0.08),
+        0 24px 80px rgba(0,0,0,0.5),
+        inset 0 1px 0 rgba(255,255,255,0.06);
+      animation: resultIn 0.6s ease-out both;
+    }
+    @keyframes resultIn {
+      from { opacity: 0; transform: scale(0.85); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .result-card.jackpot {
+      border-color: rgba(255,214,10,0.4);
+      box-shadow:
+        0 0 80px rgba(255,214,10,0.15),
+        0 24px 80px rgba(0,0,0,0.5),
+        inset 0 1px 0 rgba(255,214,10,0.2);
+    }
+
+    .result-header {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 1.1rem;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      color: var(--neon);
+      margin-bottom: 16px;
+    }
+    .result-card.jackpot .result-header {
+      color: var(--gold);
+      text-shadow: 0 0 30px rgba(255,214,10,0.4);
+    }
+
+    .prize-name {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: clamp(1.6rem, 5vw, 2.4rem);
+      line-height: 1.2;
+      margin-bottom: 24px;
+      animation: prizeIn 0.5s ease-out 0.3s both;
+    }
+    @keyframes prizeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .result-card.jackpot .prize-name {
+      background: linear-gradient(135deg, var(--gold), #ffaa00, var(--gold));
+      background-size: 200% auto;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: prizeIn 0.5s ease-out 0.3s both, shimmer 3s linear 0.8s infinite;
+    }
+
+    .result-instruction {
+      color: var(--text-dim);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .result-instruction strong { color: var(--text); }
+
+    .code-ref {
+      display: inline-block;
+      padding: 8px 20px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.05);
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+    }
+    .code-ref span { color: var(--neon); font-weight: 600; }
+
+    /* ─── Confetti ─── */
+    #confettiCanvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    /* ─── Footer ─── */
+    .brand-footer {
+      position: fixed;
+      bottom: 20px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 0.8rem;
+      color: rgba(255,255,255,0.2);
+      z-index: 1;
+    }
+    .brand-footer strong { color: rgba(255,255,255,0.35); font-weight: 600; }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 480px) {
+      .entry-card { padding: 36px 24px 32px; border-radius: 20px; }
+      .result-card { padding: 36px 24px; border-radius: 20px; }
+      .btn-spin { padding: 16px 44px; font-size: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Background orbs -->
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+
+  <!-- Screen 1: Code Entry -->
+  <section id="screen-code" class="screen active">
+    <div class="entry-card">
+      <div class="logo-mark">CC</div>
+      <h1>SPIN &amp; WIN</h1>
+      <p class="subtitle">You've earned a spin! Enter your code below.</p>
+      <div class="input-group">
+        <input type="text" id="codeInput" placeholder="e.g. SPIN-A7K2" maxlength="20" autocomplete="off" spellcheck="false" />
+        <div id="codeError" class="error-msg"></div>
+      </div>
+      <button id="btnVerify" class="btn btn-primary">
+        <span class="btn-text">Unlock Your Spin</span>
+      </button>
+    </div>
+    <footer class="brand-footer">Powered by <strong>Connections Curacao</strong></footer>
+  </section>
+
+  <!-- Screen 2: Wheel -->
+  <section id="screen-wheel" class="screen">
+    <div class="wheel-stage">
+      <div class="wheel-glow"></div>
+      <div class="wheel-wrap">
+        <div class="pointer" id="pointer"></div>
+        <canvas id="wheelCanvas"></canvas>
+      </div>
+    </div>
+    <button id="btnSpin" class="btn btn-spin">TAP TO SPIN</button>
+  </section>
+
+  <!-- Screen 3: Result -->
+  <section id="screen-result" class="screen">
+    <div class="result-card" id="resultCard">
+      <div class="result-header" id="resultHeader">You won!</div>
+      <div class="prize-name" id="prizeName"></div>
+      <p class="result-instruction">Show this screen at<br><strong>Connections Curacao</strong> to claim your prize</p>
+      <div class="code-ref">Code: <span id="prizeCode"></span></div>
+    </div>
+  </section>
+
+  <!-- Confetti overlay -->
+  <canvas id="confettiCanvas"></canvas>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════
+   CONFIG
+   ═══════════════════════════════════════════ */
+const SUPABASE_URL  = 'https://ngzxrygvotftmpgmzmcy.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5nenhyeWd2b3RmdG1wZ216bWN5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA2NTg1NDksImV4cCI6MjA4NjIzNDU0OX0.pFCPycFB0mBdnMQovwNPDIFc2PEbusuRCD0WJU9WP9s';
+
+/* ═══════════════════════════════════════════
+   PRIZES — edit labels, colors, weights anytime
+   ═══════════════════════════════════════════ */
+const PRIZES = [
+  { label: '5% off next purchase',    color: '#00b4d8', weight: 30 },
+  { label: 'Free screen protector',   color: '#ef476f', weight: 25 },
+  { label: '10% off next purchase',   color: '#06d6a0', weight: 25 },
+  { label: 'NAf 10 store credit',     color: '#7209b7', weight: 20 },
+  { label: '15% off next purchase',   color: '#ff6b35', weight: 20 },
+  { label: 'Free phone case',         color: '#118ab2', weight: 15 },
+  { label: 'NAf 25 store credit',     color: '#f72585', weight: 10 },
+  { label: 'Free earbuds',            color: '#4361ee', weight: 8  },
+  { label: 'Samsung Galaxy A07',      color: '#ffd60a', weight: 2, textColor: '#1a1a2e', jackpot: true },
+];
+
+/* ═══════════════════════════════════════════
+   STATE
+   ═══════════════════════════════════════════ */
+let codeRecord = null;   // { id, code } from Supabase
+let isSpinning = false;
+
+/* ═══════════════════════════════════════════
+   DOM
+   ═══════════════════════════════════════════ */
+const $ = s => document.querySelector(s);
+const screenCode   = $('#screen-code');
+const screenWheel  = $('#screen-wheel');
+const screenResult = $('#screen-result');
+const codeInput    = $('#codeInput');
+const codeError    = $('#codeError');
+const btnVerify    = $('#btnVerify');
+const btnSpin      = $('#btnSpin');
+const pointer      = $('#pointer');
+const canvas       = $('#wheelCanvas');
+const confettiCvs  = $('#confettiCanvas');
+
+/* ═══════════════════════════════════════════
+   SCREEN MANAGEMENT
+   ═══════════════════════════════════════════ */
+function showScreen(target) {
+  [screenCode, screenWheel, screenResult].forEach(s => s.classList.remove('active'));
+  target.classList.add('active');
+}
+
+/* ═══════════════════════════════════════════
+   SUPABASE HELPERS
+   ═══════════════════════════════════════════ */
+const sbHeaders = {
+  'apikey': SUPABASE_ANON,
+  'Authorization': 'Bearer ' + SUPABASE_ANON,
+};
+
+async function verifyCode(code) {
+  try {
+    const res = await fetch(
+      SUPABASE_URL + '/rest/v1/spin_codes?code=eq.' + encodeURIComponent(code) + '&used=eq.false&select=id,code',
+      { headers: sbHeaders }
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return rows.length ? rows[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function markUsed(id) {
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/spin_codes?id=eq.' + id, {
+      method: 'PATCH',
+      headers: { ...sbHeaders, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ used: true, used_at: new Date().toISOString() }),
+    });
+  } catch { /* best effort */ }
+}
+
+async function logResult(codeId, prizeLabel) {
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/spin_results', {
+      method: 'POST',
+      headers: { ...sbHeaders, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ code_id: codeId, prize: prizeLabel }),
+    });
+  } catch { /* best effort */ }
+}
+
+/* ═══════════════════════════════════════════
+   WHEEL — CANVAS DRAWING
+   ═══════════════════════════════════════════ */
+const SLICE = (2 * Math.PI) / PRIZES.length;
+let wheelSize = 340;
+let ctx;
+
+function setupCanvas() {
+  wheelSize = Math.min(340, window.innerWidth - 56);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = wheelSize * dpr;
+  canvas.height = wheelSize * dpr;
+  canvas.style.width = wheelSize + 'px';
+  canvas.style.height = wheelSize + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+}
+
+function drawWheel(rotation) {
+  const cx = wheelSize / 2;
+  const cy = wheelSize / 2;
+  const r = cx - 8;
+  ctx.clearRect(0, 0, wheelSize, wheelSize);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+
+  /* Outer ring */
+  ctx.beginPath();
+  ctx.arc(0, 0, r + 4, 0, 2 * Math.PI);
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  /* Segments */
+  PRIZES.forEach((p, i) => {
+    const a0 = i * SLICE;
+    const a1 = a0 + SLICE;
+
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, r, a0, a1);
+    ctx.closePath();
+    ctx.fillStyle = p.color;
+    ctx.fill();
+
+    /* Separator */
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(a0) * r, Math.sin(a0) * r);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    /* Peg dot */
+    ctx.beginPath();
+    ctx.arc(Math.cos(a0) * (r - 1), Math.sin(a0) * (r - 1), 3.5, 0, 2 * Math.PI);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+
+    /* Label — flip text on left side so it always reads outward-in */
+    ctx.save();
+    const mid = a0 + SLICE / 2;
+    ctx.rotate(mid);
+    ctx.fillStyle = p.textColor || '#fff';
+    ctx.font = '600 ' + Math.max(10, wheelSize * 0.032) + 'px "DM Sans", sans-serif';
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 3;
+    if (mid > Math.PI / 2 && mid < 3 * Math.PI / 2) {
+      ctx.rotate(Math.PI);
+      ctx.textAlign = 'left';
+      ctx.fillText(p.label, -r + 16, 4);
+    } else {
+      ctx.textAlign = 'right';
+      ctx.fillText(p.label, r - 16, 4);
+    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  });
+
+  /* Center hub */
+  const hubR = r * 0.16;
+  ctx.beginPath();
+  ctx.arc(0, 0, hubR, 0, 2 * Math.PI);
+  ctx.fillStyle = '#111827';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  /* Hub text */
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '700 ' + (hubR * 0.7) + 'px "Bricolage Grotesque", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('CC', 0, 1);
+
+  ctx.restore();
+}
+
+/* ═══════════════════════════════════════════
+   PRIZE SELECTION (weighted random)
+   ═══════════════════════════════════════════ */
+function pickPrize() {
+  const total = PRIZES.reduce((s, p) => s + p.weight, 0);
+  let rng = Math.random() * total;
+  for (const p of PRIZES) {
+    rng -= p.weight;
+    if (rng <= 0) return p;
+  }
+  return PRIZES[0];
+}
+
+/* ═══════════════════════════════════════════
+   SPIN ANIMATION
+   ═══════════════════════════════════════════ */
+function spinWheel() {
+  if (isSpinning) return;
+  isSpinning = true;
+  btnSpin.disabled = true;
+  pointer.classList.add('spinning');
+
+  const prize = pickPrize();
+  const idx = PRIZES.indexOf(prize);
+  const sliceDeg = 360 / PRIZES.length;
+
+  /* Target: pointer at top (270°) lands on center of segment idx */
+  const targetBase = 270 - (idx * sliceDeg + sliceDeg / 2);
+  const jitter = (Math.random() - 0.5) * (sliceDeg * 0.6); /* random offset within segment */
+  const normalised = ((targetBase + jitter) % 360 + 360) % 360;
+  const fullSpins = (5 + Math.floor(Math.random() * 3)) * 360;
+  const totalDeg = fullSpins + normalised;
+
+  const duration = 4200;
+  const start = performance.now();
+
+  function frame(now) {
+    const t = Math.min((now - start) / duration, 1);
+    /* Ease-out quart for a satisfying slowdown */
+    const eased = 1 - Math.pow(1 - t, 4);
+    const deg = eased * totalDeg;
+    drawWheel((deg * Math.PI) / 180);
+
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      pointer.classList.remove('spinning');
+      setTimeout(() => onSpinComplete(prize), 500);
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+/* ═══════════════════════════════════════════
+   ON SPIN COMPLETE
+   ═══════════════════════════════════════════ */
+async function onSpinComplete(prize) {
+  /* Log to Supabase (fire-and-forget) */
+  markUsed(codeRecord.id);
+  logResult(codeRecord.id, prize.label);
+
+  /* Populate result screen */
+  const isJackpot = !!prize.jackpot;
+  $('#resultCard').classList.toggle('jackpot', isJackpot);
+  $('#resultHeader').textContent = isJackpot ? 'JACKPOT!' : 'You won!';
+  $('#prizeName').textContent = prize.label;
+  $('#prizeCode').textContent = codeRecord.code;
+
+  showScreen(screenResult);
+  launchConfetti(isJackpot);
+}
+
+/* ═══════════════════════════════════════════
+   CONFETTI
+   ═══════════════════════════════════════════ */
+function launchConfetti(golden) {
+  const cvs = confettiCvs;
+  cvs.width = window.innerWidth;
+  cvs.height = window.innerHeight;
+  const cCtx = cvs.getContext('2d');
+
+  const colors = golden
+    ? ['#ffd60a','#ffaa00','#ffcc33','#fff4b0','#e6a800']
+    : ['#00b4d8','#06d6a0','#ef476f','#ffd60a','#ff6b35','#7209b7','#f72585','#4361ee'];
+
+  const particles = Array.from({ length: 120 }, () => ({
+    x: Math.random() * cvs.width,
+    y: Math.random() * -cvs.height,
+    w: 5 + Math.random() * 7,
+    h: 3 + Math.random() * 5,
+    color: colors[Math.floor(Math.random() * colors.length)],
+    vy: 1.5 + Math.random() * 3,
+    vx: (Math.random() - 0.5) * 2.5,
+    rot: Math.random() * 360,
+    rs: (Math.random() - 0.5) * 12,
+    opacity: 1,
+  }));
+
+  let frame = 0;
+  const maxFrames = 200;
+
+  function draw() {
+    cCtx.clearRect(0, 0, cvs.width, cvs.height);
+    const fade = frame > 140 ? 1 - (frame - 140) / 60 : 1;
+
+    particles.forEach(p => {
+      p.y += p.vy;
+      p.x += p.vx;
+      p.rot += p.rs;
+      p.vy += 0.03;
+
+      cCtx.save();
+      cCtx.translate(p.x, p.y);
+      cCtx.rotate((p.rot * Math.PI) / 180);
+      cCtx.globalAlpha = fade * p.opacity;
+      cCtx.fillStyle = p.color;
+      cCtx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      cCtx.restore();
+    });
+
+    frame++;
+    if (frame < maxFrames) requestAnimationFrame(draw);
+    else cCtx.clearRect(0, 0, cvs.width, cvs.height);
+  }
+
+  draw();
+}
+
+/* ═══════════════════════════════════════════
+   EVENT LISTENERS
+   ═══════════════════════════════════════════ */
+btnVerify.addEventListener('click', async () => {
+  const code = codeInput.value.trim().toUpperCase();
+  if (!code) {
+    codeError.textContent = 'Please enter your code.';
+    codeInput.classList.add('shake');
+    setTimeout(() => codeInput.classList.remove('shake'), 500);
+    return;
+  }
+
+  /* Loading state */
+  codeError.textContent = '';
+  btnVerify.disabled = true;
+  btnVerify.querySelector('.btn-text').textContent = '';
+  const loader = document.createElement('span');
+  loader.className = 'btn-loader';
+  btnVerify.appendChild(loader);
+
+  const record = await verifyCode(code);
+
+  /* Reset button */
+  btnVerify.disabled = false;
+  btnVerify.querySelector('.btn-text').textContent = 'Unlock Your Spin';
+  if (loader.parentNode) loader.remove();
+
+  if (!record) {
+    codeError.textContent = 'Invalid or already used code. Check and try again.';
+    codeInput.classList.add('shake');
+    setTimeout(() => codeInput.classList.remove('shake'), 500);
+    return;
+  }
+
+  /* Valid code — transition to wheel */
+  codeRecord = record;
+  showScreen(screenWheel);
+  setupCanvas();
+  drawWheel(0);
+});
+
+codeInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') btnVerify.click();
+});
+
+btnSpin.addEventListener('click', spinWheel);
+
+/* ═══════════════════════════════════════════
+   INIT
+   ═══════════════════════════════════════════ */
+codeInput.focus();
+
+</script>
+</body>
+</html>
