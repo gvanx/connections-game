@@ -449,11 +449,137 @@
     }
     .brand-footer strong { color: rgba(255,255,255,0.35); font-weight: 600; }
 
+    /* ─── FAQ Link ─── */
+    .faq-link {
+      display: inline-block;
+      margin-top: 20px;
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: color 0.25s;
+      cursor: pointer;
+    }
+    .faq-link:hover { color: var(--neon); }
+
+    /* ─── FAQ Modal ─── */
+    .faq-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    .faq-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .faq-modal {
+      background: linear-gradient(145deg, rgba(15,20,35,0.98), rgba(7,11,20,0.98));
+      border: 1px solid var(--surface-border);
+      border-radius: var(--radius);
+      max-width: 480px;
+      width: 100%;
+      max-height: 80vh;
+      overflow-y: auto;
+      padding: 36px 28px 28px;
+      box-shadow: 0 0 60px rgba(0,212,255,0.08), 0 24px 80px rgba(0,0,0,0.5);
+      transform: translateY(20px) scale(0.96);
+      transition: transform 0.3s ease;
+    }
+    .faq-overlay.open .faq-modal {
+      transform: translateY(0) scale(1);
+    }
+
+    .faq-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .faq-modal-header h2 {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 1.4rem;
+      color: var(--neon);
+    }
+    .faq-close {
+      width: 36px; height: 36px;
+      border-radius: 12px;
+      border: 1px solid var(--surface-border);
+      background: rgba(255,255,255,0.04);
+      color: var(--text-dim);
+      font-size: 1.2rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, color 0.2s;
+    }
+    .faq-close:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+    .faq-item { border-bottom: 1px solid var(--surface-border); }
+    .faq-item:last-child { border-bottom: none; }
+
+    .faq-question {
+      width: 100%;
+      background: none;
+      border: none;
+      padding: 16px 0;
+      font-family: var(--font-body);
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .faq-question:hover { color: var(--neon); }
+    .faq-question::after {
+      content: '+';
+      font-size: 1.2rem;
+      color: var(--text-dim);
+      transition: transform 0.25s;
+      flex-shrink: 0;
+    }
+    .faq-item.open .faq-question::after {
+      transform: rotate(45deg);
+      color: var(--neon);
+    }
+
+    .faq-answer {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+    }
+    .faq-item.open .faq-answer {
+      max-height: 200px;
+    }
+    .faq-answer p {
+      padding: 0 0 16px;
+      font-size: 0.88rem;
+      line-height: 1.65;
+      color: var(--text-dim);
+    }
+
     /* ─── Responsive ─── */
     @media (max-width: 480px) {
       .entry-card { padding: 36px 24px 32px; border-radius: 20px; }
       .result-card { padding: 36px 24px; border-radius: 20px; }
       .btn-spin { padding: 16px 44px; font-size: 1rem; }
+      .faq-modal { padding: 28px 20px 20px; }
     }
   </style>
 </head>
@@ -477,9 +603,50 @@
       <button id="btnVerify" class="btn btn-primary">
         <span class="btn-text">Unlock Your Spin</span>
       </button>
+      <a class="faq-link" id="faqOpen">Frequently Asked Questions</a>
     </div>
     <footer class="brand-footer">Powered by <strong>Connections Curacao</strong></footer>
   </section>
+
+  <!-- FAQ Modal -->
+  <div class="faq-overlay" id="faqOverlay">
+    <div class="faq-modal">
+      <div class="faq-modal-header">
+        <h2>FAQ</h2>
+        <button class="faq-close" id="faqClose">&times;</button>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-question">How do I receive a spin code?</button>
+        <div class="faq-answer"><p>Every purchase of NAf 450 or above at Connections Curacao qualifies for a complimentary spin. Your unique code will be delivered to you via WhatsApp.</p></div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-question">When does this promotion end?</button>
+        <div class="faq-answer"><p>The Spin &amp; Win promotion is available for a limited time and ends on April 2nd, 2026.</p></div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-question">Is every spin a winning spin?</button>
+        <div class="faq-answer"><p>Absolutely. Every spin is guaranteed to land on a prize &mdash; there are no losing slots on the wheel.</p></div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-question">Can I use more than one code?</button>
+        <div class="faq-answer"><p>Each code is valid for a single use only. Additional codes are earned with each new qualifying purchase of NAf 450 or more.</p></div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-question">How do I claim my prize?</button>
+        <div class="faq-answer"><p>Once the wheel has stopped, present the result screen to a staff member at Connections Curacao to redeem your prize.</p></div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-question">Terms &amp; Conditions</button>
+        <div class="faq-answer"><p>This promotion is subject to standard terms &amp; conditions. One code is issued per qualifying transaction. Connections Curacao reserves the right to withhold prizes or deny participation in cases of suspected misuse or abuse of the platform.</p></div>
+      </div>
+    </div>
+  </div>
 
   <!-- Screen 2: Wheel -->
   <section id="screen-wheel" class="screen">
@@ -865,6 +1032,24 @@ window.addEventListener('resize', () => {
     setupCanvas();
     drawWheel(0);
   }
+});
+
+/* ═══════════════════════════════════════════
+   FAQ
+   ═══════════════════════════════════════════ */
+const faqOverlay = $('#faqOverlay');
+
+$('#faqOpen').addEventListener('click', () => faqOverlay.classList.add('open'));
+$('#faqClose').addEventListener('click', () => faqOverlay.classList.remove('open'));
+faqOverlay.addEventListener('click', e => {
+  if (e.target === faqOverlay) faqOverlay.classList.remove('open');
+});
+
+document.querySelectorAll('.faq-question').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const item = btn.parentElement;
+    item.classList.toggle('open');
+  });
 });
 
 /* ═══════════════════════════════════════════
