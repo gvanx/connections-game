@@ -1,16 +1,4 @@
-<!--
-  ============================================================
-  SUPABASE SETUP — see supabase-queries.md for full SQL
-  https://supabase.com/dashboard/project/ngzxrygvotftmpgmzmcy/sql
-
-  Architecture: All prize logic runs server-side via the
-  spin_the_wheel(p_code) RPC function. The client only
-  sends the code and animates to the server-decided prize.
-
-  Tables: spin_codes, spin_results, prizes
-  Function: spin_the_wheel(text) — SECURITY DEFINER
-  ============================================================
--->
+<!-- Supabase setup: run setup.sql in the SQL Editor -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24,6 +12,8 @@
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://game.connectionscuracao.net/" />
   <meta name="theme-color" content="#070b14" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="manifest.json" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -544,7 +534,7 @@ const PRIZES = [
 /* ═══════════════════════════════════════════
    STATE
    ═══════════════════════════════════════════ */
-let pendingResult = null;   // { prize_index, prize_label, jackpot, code } from RPC
+let spinResult = null;   // { code, label, color, text_color, jackpot } from RPC
 let isSpinning = false;
 
 /* ═══════════════════════════════════════════
@@ -571,25 +561,32 @@ function showScreen(target) {
 }
 
 /* ═══════════════════════════════════════════
-   SUPABASE HELPERS
+   SUPABASE RPC — atomic spin
    ═══════════════════════════════════════════ */
 const sbHeaders = {
   'apikey': SUPABASE_ANON,
   'Authorization': 'Bearer ' + SUPABASE_ANON,
+  'Content-Type': 'application/json',
 };
 
-async function callSpinRPC(code) {
-  try {
-    const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/spin_the_wheel', {
-      method: 'POST',
-      headers: { ...sbHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ p_code: code }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
+async function callSpin(code) {
+  const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/spin', {
+    method: 'POST',
+    headers: sbHeaders,
+    body: JSON.stringify({ code_text: code }),
+  });
+  if (!res.ok) throw new Error('SERVER_ERROR');
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data; // { label, color, text_color, jackpot }
+}
+
+function sendPrizeEmail(code, prize, jackpot) {
+  fetch(SUPABASE_URL + '/functions/v1/send-prize-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_ANON },
+    body: JSON.stringify({ code, prize, jackpot }),
+  }).catch(() => { /* fire-and-forget */ });
 }
 
 /* ═══════════════════════════════════════════
@@ -697,12 +694,13 @@ function drawWheel(rotation) {
    SPIN ANIMATION
    ═══════════════════════════════════════════ */
 function spinWheel() {
-  if (isSpinning || !pendingResult) return;
+  if (isSpinning || !spinResult) return;
   isSpinning = true;
   btnSpin.disabled = true;
   pointer.classList.add('spinning');
 
-  const idx = pendingResult.prize_index;
+  /* Find the matching segment by label (server-selected prize) */
+  const idx = PRIZES.findIndex(p => p.label === spinResult.label);
   const sliceDeg = 360 / PRIZES.length;
 
   /* Target: pointer at top (270°) lands on center of segment idx */
@@ -736,14 +734,17 @@ function spinWheel() {
    ON SPIN COMPLETE
    ═══════════════════════════════════════════ */
 function onSpinComplete() {
-  const isJackpot = !!pendingResult.jackpot;
+  const isJackpot = !!spinResult.jackpot;
   $('#resultCard').classList.toggle('jackpot', isJackpot);
   $('#resultHeader').textContent = isJackpot ? 'JACKPOT!' : 'You won!';
-  $('#prizeName').textContent = pendingResult.prize_label;
-  $('#prizeCode').textContent = pendingResult.code;
+  $('#prizeName').textContent = spinResult.label;
+  $('#prizeCode').textContent = spinResult.code;
 
   showScreen(screenResult);
   launchConfetti(isJackpot);
+
+  /* Email notification (fire-and-forget) */
+  sendPrizeEmail(spinResult.code, spinResult.label, isJackpot);
 }
 
 /* ═══════════════════════════════════════════
@@ -822,25 +823,32 @@ btnVerify.addEventListener('click', async () => {
   loader.className = 'btn-loader';
   btnVerify.appendChild(loader);
 
-  const result = await callSpinRPC(code);
+  try {
+    const prize = await callSpin(code);
+    spinResult = { code, ...prize };
 
-  /* Reset button */
-  btnVerify.disabled = false;
-  btnVerify.querySelector('.btn-text').textContent = 'Unlock Your Spin';
-  if (loader.parentNode) loader.remove();
-
-  if (!result) {
-    codeError.textContent = 'Invalid or already used code. Check and try again.';
+    /* Valid code — transition to wheel */
+    showScreen(screenWheel);
+    setupCanvas();
+    drawWheel(0);
+  } catch (err) {
+    let msg;
+    if (err instanceof TypeError) {
+      /* Network / fetch failure */
+      msg = 'Connection error. Please check your internet and try again.';
+    } else if (err.message === 'INVALID_CODE' || err.message === 'ALREADY_USED') {
+      msg = 'Invalid or already used code.';
+    } else {
+      msg = 'Something went wrong. Please try again.';
+    }
+    codeError.textContent = msg;
     codeInput.classList.add('shake');
     setTimeout(() => codeInput.classList.remove('shake'), 500);
-    return;
+  } finally {
+    btnVerify.disabled = false;
+    btnVerify.querySelector('.btn-text').textContent = 'Unlock Your Spin';
+    if (loader.parentNode) loader.remove();
   }
-
-  /* Valid code — prize already decided server-side */
-  pendingResult = result;
-  showScreen(screenWheel);
-  setupCanvas();
-  drawWheel(0);
 });
 
 codeInput.addEventListener('keydown', e => {
@@ -848,6 +856,14 @@ codeInput.addEventListener('keydown', e => {
 });
 
 btnSpin.addEventListener('click', spinWheel);
+
+/* Resize canvas when on wheel screen and not spinning */
+window.addEventListener('resize', () => {
+  if (screenWheel.classList.contains('active') && !isSpinning) {
+    setupCanvas();
+    drawWheel(0);
+  }
+});
 
 /* ═══════════════════════════════════════════
    INIT
