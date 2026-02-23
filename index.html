@@ -570,15 +570,17 @@ const sbHeaders = {
 };
 
 async function callSpin(code) {
-  const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/spin', {
+  const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/spin_the_wheel', {
     method: 'POST',
     headers: sbHeaders,
-    body: JSON.stringify({ code_text: code }),
+    body: JSON.stringify({ p_code: code }),
   });
-  if (!res.ok) throw new Error('SERVER_ERROR');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || 'SERVER_ERROR');
+  }
   const data = await res.json();
-  if (data.error) throw new Error(data.error);
-  return data; // { label, color, text_color, jackpot }
+  return { label: data.prize_label, jackpot: data.jackpot };
 }
 
 function sendPrizeEmail(code, prize, jackpot) {

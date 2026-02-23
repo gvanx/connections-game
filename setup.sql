@@ -24,24 +24,24 @@ CREATE TABLE IF NOT EXISTS spin_results (
 -- 3. Create the prizes config table
 CREATE TABLE IF NOT EXISTS prizes (
   id serial PRIMARY KEY,
+  position integer NOT NULL UNIQUE,
   label text NOT NULL,
-  color text NOT NULL,
-  weight int NOT NULL DEFAULT 10,
-  text_color text NOT NULL DEFAULT '#ffffff',
+  weight integer NOT NULL DEFAULT 1,
   jackpot boolean NOT NULL DEFAULT false
 );
 
 -- 4. Seed the prizes
-INSERT INTO prizes (label, color, weight, text_color, jackpot) VALUES
-  ('5% off next purchase',  '#00b4d8', 30, '#ffffff', false),
-  ('Free screen protector', '#ef476f', 25, '#ffffff', false),
-  ('10% off next purchase', '#06d6a0', 25, '#ffffff', false),
-  ('NAf 20 store credit',   '#7209b7', 20, '#ffffff', false),
-  ('15% off next purchase', '#ff6b35', 20, '#ffffff', false),
-  ('Free phone case',       '#118ab2', 15, '#ffffff', false),
-  ('NAf 50 store credit',   '#f72585', 10, '#ffffff', false),
-  ('Free JBL earbuds',      '#4361ee',  8, '#ffffff', false),
-  ('Samsung Galaxy A07',    '#ffd60a',  2, '#1a1a2e', true);
+INSERT INTO prizes (position, label, weight, jackpot) VALUES
+  (0, '5% off next purchase',   30, false),
+  (1, 'Free screen protector',  25, false),
+  (2, '10% off next purchase',  25, false),
+  (3, 'NAf 20 store credit',    20, false),
+  (4, '15% off next purchase',  20, false),
+  (5, 'Free phone case',        15, false),
+  (6, 'NAf 50 store credit',    10, false),
+  (7, 'Free JBL earbuds',        2, false),
+  (8, 'Samsung Galaxy A07',      2, true)
+ON CONFLICT (position) DO NOTHING;
 
 -- 5. Enable RLS
 ALTER TABLE spin_codes ENABLE ROW LEVEL SECURITY;
@@ -58,71 +58,64 @@ CREATE POLICY "anon_select_prizes" ON prizes
 --    - Marks code used
 --    - Logs result
 --    - All in one transaction with row-level locking
-CREATE OR REPLACE FUNCTION spin(code_text text)
-RETURNS jsonb
+CREATE OR REPLACE FUNCTION spin_the_wheel(p_code text)
+RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
-  v_code_id uuid;
-  v_code    text;
-  v_prize   record;
-  v_total   int;
-  v_rng     float;
-  v_running float := 0;
+  v_code_row spin_codes%ROWTYPE;
+  v_prize    prizes%ROWTYPE;
+  v_total    integer;
+  v_rng      double precision;
 BEGIN
-  -- Lock the code row to prevent race conditions
-  SELECT id, code INTO v_code_id, v_code
+  -- Validate and lock the code
+  SELECT * INTO v_code_row
   FROM spin_codes
-  WHERE code = upper(trim(code_text))
+  WHERE code = upper(trim(p_code)) AND used = false
   FOR UPDATE;
 
-  IF v_code_id IS NULL THEN
-    RETURN jsonb_build_object('error', 'INVALID_CODE');
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'INVALID_CODE';
   END IF;
-
-  -- Check if already used (after lock)
-  IF (SELECT used FROM spin_codes WHERE id = v_code_id) THEN
-    RETURN jsonb_build_object('error', 'ALREADY_USED');
-  END IF;
-
-  -- Pick weighted random prize
-  SELECT sum(weight) INTO v_total FROM prizes;
-  v_rng := random() * v_total;
-
-  FOR v_prize IN SELECT * FROM prizes ORDER BY id LOOP
-    v_running := v_running + v_prize.weight;
-    IF v_rng <= v_running THEN
-      EXIT;
-    END IF;
-  END LOOP;
 
   -- Mark code as used
   UPDATE spin_codes
   SET used = true, used_at = now()
-  WHERE id = v_code_id;
+  WHERE id = v_code_row.id;
+
+  -- Weighted random prize selection
+  SELECT sum(weight) INTO v_total FROM prizes;
+  v_rng := random() * v_total;
+
+  SELECT * INTO v_prize
+  FROM (
+    SELECT *, sum(weight) OVER (ORDER BY position) AS cumulative
+    FROM prizes
+  ) sub
+  WHERE cumulative >= v_rng
+  ORDER BY position
+  LIMIT 1;
 
   -- Log result
   INSERT INTO spin_results (code_id, prize)
-  VALUES (v_code_id, v_prize.label);
+  VALUES (v_code_row.id, v_prize.label);
 
-  -- Return prize details
-  RETURN jsonb_build_object(
-    'label',      v_prize.label,
-    'color',      v_prize.color,
-    'text_color', v_prize.text_color,
-    'jackpot',    v_prize.jackpot
+  -- Return result
+  RETURN json_build_object(
+    'prize_index', v_prize.position,
+    'prize_label', v_prize.label,
+    'jackpot',     v_prize.jackpot,
+    'code',        v_code_row.code
   );
 END;
 $$;
 
 -- 8. Grant execute to anon role
-GRANT EXECUTE ON FUNCTION spin(text) TO anon;
+GRANT EXECUTE ON FUNCTION spin_the_wheel(text) TO anon;
 
 -- 9. Revoke direct table manipulation policies that are no longer needed
 -- (The RPC function runs as SECURITY DEFINER so it bypasses RLS)
--- Keep select on spin_codes only if needed for other purposes;
--- the spin() function handles everything now.
 DROP POLICY IF EXISTS "anon_update_codes" ON spin_codes;
 DROP POLICY IF EXISTS "anon_insert_results" ON spin_results;
 DROP POLICY IF EXISTS "anon_select_codes" ON spin_codes;
@@ -136,5 +129,6 @@ ON CONFLICT (code) DO NOTHING;
 
 -- 11. Generate batch codes (run when you need more)
 -- INSERT INTO spin_codes (code)
--- SELECT 'SPIN-' || upper(substr(md5(random()::text), 1, 4))
--- FROM generate_series(1, 50);
+-- SELECT 'SPIN-' || upper(substr(md5(i::text || random()::text), 1, 6))
+-- FROM generate_series(1, 100) AS i
+-- ON CONFLICT (code) DO NOTHING;

@@ -16,11 +16,11 @@ INSERT INTO prizes (position, label, weight, jackpot) VALUES
   (0, '5% off next purchase',   30, false),
   (1, 'Free screen protector',  25, false),
   (2, '10% off next purchase',  25, false),
-  (3, 'NAf 10 store credit',    20, false),
+  (3, 'NAf 20 store credit',    20, false),
   (4, '15% off next purchase',  20, false),
   (5, 'Free phone case',        15, false),
-  (6, 'NAf 25 store credit',    10, false),
-  (7, 'Free earbuds',            8, false),
+  (6, 'NAf 50 store credit',    10, false),
+  (7, 'Free JBL earbuds',        2, false),
   (8, 'Samsung Galaxy A07',      2, true);
 ```
 
@@ -126,7 +126,7 @@ ON CONFLICT (code) DO NOTHING;
 
 ### Update prize weights
 ```sql
-UPDATE prizes SET weight = 5 WHERE label = 'Free earbuds';
+UPDATE prizes SET weight = 5 WHERE label = 'Free JBL earbuds';
 ```
 
 ### View current prize config
