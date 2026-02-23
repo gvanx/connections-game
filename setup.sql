@@ -32,15 +32,15 @@ CREATE TABLE IF NOT EXISTS prizes (
 
 -- 4. Seed the prizes
 INSERT INTO prizes (position, label, weight, jackpot) VALUES
-  (0, '5% off next purchase',   30, false),
+  (0, '5% off this purchase',   30, false),
   (1, 'Free screen protector',  25, false),
-  (2, '10% off next purchase',  25, false),
+  (2, '10% off this purchase',  25, false),
   (3, 'NAf 20 store credit',    20, false),
-  (4, '15% off next purchase',  20, false),
+  (4, '15% off this purchase',  20, false),
   (5, 'Free phone case',        15, false),
   (6, 'NAf 50 store credit',    10, false),
   (7, 'Free JBL earbuds',        2, false),
-  (8, 'Samsung Galaxy A07',      2, true)
+  (8, 'Samsung A16',             1, true)
 ON CONFLICT (position) DO NOTHING;
 
 -- 5. Enable RLS
